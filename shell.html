@@ -1,0 +1,175 @@
+<!doctype html>
+<!-- Web/mobile companion for libgomputer_host. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>gomputer</title>
+  <style>
+    :root { color-scheme: dark; font-family: monospace; }
+    body { margin: 0; background: #171717; color: #ddd; }
+    main { padding: 16px; text-align: center; }
+    canvas { display: block; margin: 0 auto; width: min(100%, 960px); height: auto;
+      image-rendering: pixelated; touch-action: none; outline: none; }
+    p { font-size: 13px; }
+    button { font: inherit; min-height: 44px; background: #303030; color: #eee;
+      border: 1px solid #666; border-radius: 4px; padding: 6px 12px; }
+    button[aria-pressed="true"] { background: #ddd; color: #171717; }
+    #keys { position: fixed; bottom: 0; left: 0; right: 0; display: flex; gap: 4px;
+      overflow-x: auto; padding: 6px max(6px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom));
+      background: #171717; z-index: 2; }
+    #keys[hidden] { display: none; }
+    #keys button { flex: 0 0 auto; }
+    #typing { position: fixed; bottom: 64px; left: 8px; width: 1px; height: 1px;
+      padding: 0; border: 0; opacity: 0.01; font-size: 16px; }
+    @media (pointer: coarse) { main { padding: 8px 8px 76px; } }
+    /* Below the logical display width, nearest-neighbor loses entire glyph strokes. */
+    @media (max-width: 495px) { canvas { image-rendering: auto; } }
+  </style>
+</head>
+<body>
+  <main>
+    <canvas id="canvas" width="960" height="540" tabindex="0" aria-label="gomputer display and touchpad"></canvas>
+    <p id="status" role="status">Loading workstation…</p>
+    <p>Desktop: click the display to focus. Ctrl+R reloads Lua.<br>
+      Touch: slide to move, tap to click, hold then slide to drag.</p>
+  </main>
+  <textarea id="typing" aria-label="Workstation keyboard input" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  <nav id="keys" aria-label="Workstation special keys" hidden>
+    <button id="keyboard">Keyboard</button>
+    <button data-mod="64" aria-pressed="false">Ctrl</button>
+    <button data-mod="1" aria-pressed="false">Shift</button>
+    <button data-mod="256" aria-pressed="false">Alt</button>
+    <button data-key="27">Esc</button>
+    <button data-key="9">Tab</button>
+    <button data-key="1073741904" aria-label="Left arrow">←</button>
+    <button data-key="1073741906" aria-label="Up arrow">↑</button>
+    <button data-key="1073741905" aria-label="Down arrow">↓</button>
+    <button data-key="1073741903" aria-label="Right arrow">→</button>
+    <button data-key="8">⌫</button>
+    <button data-key="13">Enter</button>
+    <button id="reload">Reload Lua</button>
+  </nav>
+  <script>
+    const canvas = document.getElementById('canvas');
+    const typing = document.getElementById('typing');
+    const keys = document.getElementById('keys');
+    let ready = false, mods = 0;
+    var Module = {
+      canvas,
+      print: (...args) => console.log(...args),
+      printErr: (...args) => console.error(...args),
+      onRuntimeInitialized() {
+        ready = true;
+        document.getElementById('status').textContent = 'Workstation ready';
+        keys.hidden = !matchMedia('(pointer: coarse)').matches;
+      },
+      onAbort(error) { document.getElementById('status').textContent = 'Could not start: ' + error; },
+      onExit() { ready = false; document.getElementById('status').textContent = 'Workstation stopped'; }
+    };
+    function key(code, mod = mods) {
+      if (!ready) return;
+      Module._web_key(code, mod, 1);
+      Module._web_key(code, mod, 0);
+    }
+    function text(value) {
+      if (!ready || !value) return;
+      if (mods & (64 | 256)) {
+        for (const char of value) key(char.toLowerCase().codePointAt(0));
+      } else {
+        Module.ccall('web_text', null, ['string'], [mods & 1 ? value.toUpperCase() : value]);
+      }
+    }
+    // The visual viewport excludes the software keyboard on browsers that overlay it.
+    function viewport() {
+      const v = window.visualViewport;
+      const bottom = v ? Math.max(0, innerHeight - v.height - v.offsetTop) : 0;
+      keys.style.bottom = bottom + 'px';
+      typing.style.bottom = (bottom + 64) + 'px';
+    }
+    window.visualViewport?.addEventListener('resize', viewport);
+    window.visualViewport?.addEventListener('scroll', viewport);
+    viewport();
+    keys.addEventListener('pointerdown', e => {
+      if (e.target.closest('button')) e.preventDefault();
+    });
+    keys.addEventListener('click', e => {
+      const b = e.target.closest('button');
+      if (!b || !ready) return;
+      if (b.id === 'keyboard') {
+        if (document.activeElement === typing) typing.blur();
+        else { typing.value = ' '; typing.focus(); typing.setSelectionRange(1, 1); }
+      } else if (b.dataset.mod) {
+        mods ^= Number(b.dataset.mod);
+        b.setAttribute('aria-pressed', String(Boolean(mods & Number(b.dataset.mod))));
+      } else if (b.id === 'reload') key(114, 64);
+      else key(Number(b.dataset.key));
+    });
+    typing.addEventListener('beforeinput', e => {
+      if (e.inputType === 'deleteContentBackward') { e.preventDefault(); key(8); }
+      if (e.inputType === 'insertLineBreak') { e.preventDefault(); key(13); }
+    });
+    function commitText() {
+      text(typing.value.slice(1));
+      typing.value = ' ';
+      typing.setSelectionRange(1, 1);
+    }
+    typing.addEventListener('input', e => { if (!e.isComposing) commitText(); });
+    typing.addEventListener('compositionend', commitText);
+    const special = { Escape: 27, Tab: 9, Backspace: 8, Enter: 13,
+      ArrowLeft: 1073741904, ArrowUp: 1073741906, ArrowDown: 1073741905, ArrowRight: 1073741903 };
+    typing.addEventListener('keydown', e => {
+      // Do not let SDL deliver the same key a second time from the hidden input.
+      e.stopPropagation();
+      if (special[e.key]) { e.preventDefault(); key(special[e.key]); }
+    });
+    typing.addEventListener('keyup', e => e.stopPropagation());
+    canvas.addEventListener('keydown', e => {
+      if (e.key === 'Tab' || (e.ctrlKey && e.key.toLowerCase() === 'r')) e.preventDefault();
+    });
+    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    let touch = null;
+    // Capture touch before SDL translates it into absolute mouse movement.
+    for (const name of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) {
+      canvas.addEventListener(name, e => {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (!ready) return;
+        if (name === 'touchstart' && !touch) {
+          const t = e.changedTouches[0];
+          touch = { id: t.identifier, x: t.clientX, y: t.clientY, rx: 0, ry: 0, moved: 0, dragging: false, timer: null };
+          touch.timer = setTimeout(() => {
+            if (touch && touch.moved < 8) {
+              touch.dragging = true;
+              Module._web_pointer(0, 0, 1, 1);
+            }
+          }, 400);
+        } else if (touch) {
+          const t = Array.from(e.changedTouches).find(t => t.identifier === touch.id);
+          if (!t) return;
+          if (name === 'touchmove') {
+            const dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+            touch.moved += Math.hypot(dx, dy);
+            if (touch.moved >= 8) clearTimeout(touch.timer);
+            const scale = 480 / canvas.getBoundingClientRect().width;
+            touch.rx += dx * scale; touch.ry += dy * scale;
+            const x = Math.round(touch.rx), y = Math.round(touch.ry);
+            touch.rx -= x; touch.ry -= y;
+            touch.x = t.clientX; touch.y = t.clientY;
+            Module._web_pointer(x, y, 0, 0);
+          } else {
+            clearTimeout(touch.timer);
+            if (touch.dragging) Module._web_pointer(0, 0, 1, 0);
+            else if (name === 'touchend' && touch.moved < 8) {
+              Module._web_pointer(0, 0, 1, 1);
+              Module._web_pointer(0, 0, 1, 0);
+            }
+            touch = null;
+          }
+        }
+      }, { capture: true, passive: false });
+    }
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>
