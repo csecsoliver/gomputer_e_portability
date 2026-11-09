@@ -126,3 +126,13 @@ char *host_asset_path(const char *filename) {
 #endif
     return path;
 }
+
+char *host_db_path(void) {
+    char *path = NULL;
+#ifdef __EMSCRIPTEN__
+    SDL_asprintf(&path, "/gomputer_vfs.db");
+#else
+    SDL_asprintf(&path, "%sgomputer_vfs.db", SDL_GetBasePath());
+#endif
+    return path;
+}
